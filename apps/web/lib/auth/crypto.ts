@@ -8,6 +8,11 @@
  *   blob = AES-GCM-encrypt(privateKey, key, iv)
  *
  * Everything is stored base64-encoded so it survives JSON round-trips in localStorage.
+ *
+ * Note: TypeScript 5.7's DOM lib types Web Crypto's `BufferSource` as
+ * `Uint8Array<ArrayBuffer>` specifically, while plain `new Uint8Array(n)`
+ * widens to `Uint8Array<ArrayBufferLike>` (which includes `SharedArrayBuffer`).
+ * We pass everything through the small `asBufferSource` cast helper below.
  */
 
 const PBKDF2_ITERATIONS = 200_000;
@@ -34,11 +39,16 @@ function randomBytes(length: number): Uint8Array {
   return out;
 }
 
+/** Cast a Uint8Array to the BufferSource shape Web Crypto expects. */
+function asBufferSource(u: Uint8Array): ArrayBuffer {
+  return u.buffer as ArrayBuffer;
+}
+
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const passwordKey = await crypto.subtle.importKey(
     "raw",
-    enc.encode(password),
+    asBufferSource(enc.encode(password)),
     "PBKDF2",
     false,
     ["deriveKey"]
@@ -47,7 +57,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt,
+      salt: asBufferSource(salt),
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
     },
@@ -74,9 +84,9 @@ export async function encryptWithPassword(
 
   const enc = new TextEncoder();
   const ciphertextBuf = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: asBufferSource(iv) },
     key,
-    enc.encode(plaintext)
+    asBufferSource(enc.encode(plaintext))
   );
 
   return {
@@ -97,9 +107,9 @@ export async function decryptWithPassword(
 
   // AES-GCM authenticates the tag; wrong password throws OperationError.
   const plaintextBuf = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: asBufferSource(iv) },
     key,
-    ciphertext
+    asBufferSource(ciphertext)
   );
 
   return new TextDecoder().decode(plaintextBuf);
