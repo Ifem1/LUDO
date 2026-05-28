@@ -25,10 +25,11 @@ export function PlayerCard({ player, isCurrentTurn, isMe }: Props) {
     <div
       className={`rounded-xl border p-3 transition-all ${
         player.forfeited ? "opacity-40" : ""
-      } ${isCurrentTurn ? "ring-2" : ""}`}
+      }`}
       style={{
         borderColor: hex + "88",
-        ringColor: hex,
+        // ring colour for the `ring-2` class above
+        ...(isCurrentTurn ? { boxShadow: `0 0 0 2px ${hex}` } : {}),
       }}
     >
       <div className="mb-2 flex items-center gap-2">
