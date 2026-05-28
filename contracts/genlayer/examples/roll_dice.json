@@ -1,0 +1,17 @@
+{
+  "method": "roll_dice",
+  "args": [
+    "GAME01",
+    "my-raw-seed-uuid-walletaddress-timestamp"
+  ],
+  "caller": "0xCurrentTurnPlayerAddress",
+  "description": "Current player reveals their raw seed. Contract verifies sha256(rawSeed)==commitment, then derives dice.",
+  "expected_response": {
+    "ok": true,
+    "action": "roll_dice",
+    "game_id": "GAME01",
+    "dice": 4,
+    "valid_moves": [0, 1, 2, 3],
+    "cancelled": false
+  }
+}

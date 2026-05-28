@@ -1,0 +1,14 @@
+{
+  "method": "forfeit_game",
+  "args": ["GAME01"],
+  "caller": "0xPlayerWalletAddress",
+  "description": "Player forfeits. If only one other active player remains, that player wins immediately.",
+  "expected_response": {
+    "ok": true,
+    "action": "forfeit_game",
+    "game_id": "GAME01",
+    "player": "0xplayerwalletaddress",
+    "status": "forfeited",
+    "winner": "0xotheractiveplayeraddress"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "method": "create_game",
+  "args": ["GAME01", 2],
+  "caller": "0xYourWalletAddress",
+  "description": "Creates a new game with ID 'GAME01' for 2 players. Caller becomes the creator.",
+  "expected_response": {
+    "ok": true,
+    "action": "create_game",
+    "game_id": "GAME01",
+    "creator": "0xyourwalletaddress"
+  }
+}

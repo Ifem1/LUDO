@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #F8F7FF;
+  --surface: #FFFFFF;
+  --primary: #6D28D9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: #1F1F1F;
+  font-family: 'Inter', system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(15, 1fr);
+  grid-template-rows: repeat(15, 1fr);
+  width: 100%;
+  aspect-ratio: 1;
+}
+
+.board-cell {
+  position: relative;
+  border: 1px solid #1F1F1F22;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: #F3F0FF;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #6D28D9;
+  border-radius: 2px;
+}

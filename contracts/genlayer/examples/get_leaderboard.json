@@ -1,0 +1,18 @@
+{
+  "method": "get_leaderboard",
+  "args": [50],
+  "type": "view",
+  "description": "Returns up to 50 player stat rows. Frontend sorts by wins desc, winRate desc, captures desc.",
+  "example_response_shape": [
+    {
+      "player": "0xabc...",
+      "games_played": 10,
+      "wins": 7,
+      "losses": 3,
+      "captures": 22,
+      "forfeits": 0,
+      "total_moves": 840,
+      "win_rate": 7000
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "method": "join_game",
+  "args": ["GAME01", "red"],
+  "caller": "0xCreatorWalletAddress",
+  "description": "Creator joins their own game as red. A second call from a different wallet with 'blue' completes the lobby.",
+  "expected_response": {
+    "ok": true,
+    "action": "join_game",
+    "game_id": "GAME01",
+    "player": "0xcreatorwalletaddress",
+    "colour": "red"
+  }
+}

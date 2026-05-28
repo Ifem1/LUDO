@@ -1,0 +1,17 @@
+{
+  "method": "get_player_stats",
+  "args": ["0xPlayerWalletAddress"],
+  "type": "view",
+  "description": "Returns stats for a specific player. win_rate is (wins/games_played)*10000 (basis points).",
+  "example_response_shape": {
+    "player": "0xplayerwalletaddress",
+    "games_played": 5,
+    "wins": 3,
+    "losses": 2,
+    "captures": 8,
+    "forfeits": 0,
+    "total_moves": 350,
+    "win_rate": 6000,
+    "last_played_at": 42
+  }
+}

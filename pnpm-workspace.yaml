@@ -1,0 +1,29 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+blockExoticSubdeps: false
+
+overrides:
+  ox: "0.14.25"
+  "@wagmi/connectors": "5.7.7"
+  "@wagmi/core": "2.16.3"
+  wagmi: "2.14.16"
+  "@rainbow-me/rainbowkit": "2.1.7"
+
+allowBuilds:
+  bufferutil: true
+  keccak: true
+  sharp: true
+  unrs-resolver: true
+  utf-8-validate: true
+
+onlyBuiltDependencies:
+  - bufferutil
+  - keccak
+  - sharp
+  - unrs-resolver
+  - utf-8-validate
+
+minimumReleaseAgeExclude:
+  - ox@0.14.25

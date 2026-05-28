@@ -1,0 +1,18 @@
+{
+  "method": "submit_move",
+  "args": ["GAME01", 0],
+  "caller": "0xCurrentTurnPlayerAddress",
+  "description": "Move token at index 0. Token index must be in the valid_moves list returned by roll_dice.",
+  "expected_response": {
+    "ok": true,
+    "action": "submit_move",
+    "game_id": "GAME01",
+    "player": "0xcurrentturnplayeraddress",
+    "token_index": 0,
+    "from": -1,
+    "to": 0,
+    "captured": false,
+    "winner": null,
+    "status": "active"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "method": "start_game",
+  "args": ["GAME01"],
+  "caller": "0xCreatorWalletAddress",
+  "description": "Only the creator can call this. All players must have committed seeds. Game moves to 'active'.",
+  "expected_response": {
+    "ok": true,
+    "action": "start_game",
+    "game_id": "GAME01",
+    "current_player": "0xcreatorwalletaddress"
+  }
+}
