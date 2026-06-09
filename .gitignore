@@ -11,3 +11,4 @@ Thumbs.db
 coverage/
 
 apps/web/.env.local
+.vercel

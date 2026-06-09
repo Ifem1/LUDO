@@ -10,6 +10,7 @@ export function parseGameState(raw: RawGameContract): GameState {
     gameId: raw.game_id,
     creator: raw.creator,
     status: raw.status as GameState["status"],
+    mode: (raw.mode === "vs_ai" ? "vs_ai" : "pvp") as GameState["mode"],
     maxPlayers: raw.max_players as 2 | 3 | 4,
     players: raw.players.map(parsePlayerState),
     currentTurnIndex: raw.current_turn_index,
@@ -35,6 +36,7 @@ function parsePlayerState(raw: RawPlayerContract): PlayerState {
     hasCommittedSeed: raw.has_committed_seed,
     hasRevealedSeed: raw.has_revealed_seed,
     forfeited: raw.forfeited ?? false,
+    isAi: raw.is_ai ?? false,
     joinedAt: raw.joined_at,
   };
 }

@@ -8,6 +8,8 @@ export type GameStatus =
   | "cancelled"
   | "forfeited";
 
+export type GameMode = "pvp" | "vs_ai";
+
 export type PlayerState = {
   address: string;
   colour: PlayerColour;
@@ -16,6 +18,7 @@ export type PlayerState = {
   hasCommittedSeed: boolean;
   hasRevealedSeed: boolean;
   forfeited?: boolean;
+  isAi?: boolean;
   joinedAt: number;
 };
 
@@ -23,6 +26,7 @@ export type GameState = {
   gameId: string;
   creator: string;
   status: GameStatus;
+  mode: GameMode;
   maxPlayers: 2 | 3 | 4;
   players: PlayerState[];
   currentTurnIndex: number;

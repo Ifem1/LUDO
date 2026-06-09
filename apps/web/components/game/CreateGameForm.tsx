@@ -18,6 +18,7 @@ export function CreateGameForm() {
   const router = useRouter();
   const { address } = useWallet();
   const [gameId] = useState(() => generateGameId());
+  const [mode, setMode] = useState<"pvp" | "vs_ai">("pvp");
   const [maxPlayers, setMaxPlayers] = useState<2 | 3 | 4>(2);
   const [colour, setColour] = useState<PlayerColour>("red");
   const [step, setStep] = useState<"form" | "creating" | "joining" | "seeding" | "done">("form");
@@ -31,10 +32,15 @@ export function CreateGameForm() {
     setError(null);
     try {
       setStep("creating");
-      await createGame(maxPlayers);
+      // vs_ai forces 2 players (1 human + the AI seat); the contract enforces
+      // the same, but we send the right value to avoid an extra failure mode.
+      await createGame(mode === "vs_ai" ? 2 : maxPlayers, mode);
 
       setStep("joining");
-      await joinGame(colour);
+      // In vs_ai the AI takes "blue" — refuse it client-side so the contract
+      // never returns colour_taken.
+      const joinColour = mode === "vs_ai" && colour === "blue" ? "red" : colour;
+      await joinGame(joinColour);
 
       setStep("seeding");
       const { commitment } = await prepareSeed();
@@ -89,6 +95,36 @@ export function CreateGameForm() {
       </div>
 
       <div>
+        <label className="mb-2 block text-sm font-semibold text-text-dark">Mode</label>
+        <div className="flex gap-2">
+          {([
+            { key: "pvp", label: "PvP", desc: "Play vs friends" },
+            { key: "vs_ai", label: "vs AI", desc: "LLM opponent" },
+          ] as const).map((m) => (
+            <button
+              key={m.key}
+              onClick={() => setMode(m.key)}
+              className={`flex-1 rounded-lg border py-2 text-sm font-semibold transition-colors ${
+                mode === m.key
+                  ? "border-primary bg-primary text-white"
+                  : "border-border bg-surface text-text-muted hover:border-primary"
+              }`}
+            >
+              <div>{m.label}</div>
+              <div className="text-[10px] font-normal opacity-80">{m.desc}</div>
+            </button>
+          ))}
+        </div>
+        {mode === "vs_ai" && (
+          <p className="mt-1 text-xs text-text-muted">
+            The AI takes the <strong>blue</strong> seat. Its moves are decided by an LLM under
+            GenLayer&apos;s comparative equivalence principle.
+          </p>
+        )}
+      </div>
+
+      {mode === "pvp" && (
+      <div>
         <label className="mb-2 block text-sm font-semibold text-text-dark">Max Players</label>
         <div className="flex gap-2">
           {([2, 3, 4] as const).map((n) => (
@@ -106,6 +142,7 @@ export function CreateGameForm() {
           ))}
         </div>
       </div>
+      )}
 
       <div>
         <label className="mb-2 block text-sm font-semibold text-text-dark">Your Colour</label>

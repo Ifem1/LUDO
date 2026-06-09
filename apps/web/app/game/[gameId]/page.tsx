@@ -8,6 +8,8 @@ import { GameControls } from "@/components/ludo/GameControls";
 import { PlayerCard } from "@/components/ludo/PlayerCard";
 import { MoveHistory } from "@/components/ludo/MoveHistory";
 import { DiceProofPanel } from "@/components/ludo/DiceProofPanel";
+import { AiTurnPanel } from "@/components/ludo/AiTurnPanel";
+import { DisputePanel } from "@/components/ludo/DisputePanel";
 import { WinnerModal } from "@/components/ludo/WinnerModal";
 import { ForfeitModal } from "@/components/ludo/ForfeitModal";
 import { MatchSummary } from "@/components/ludo/MatchSummary";
@@ -110,6 +112,8 @@ export default function GamePage({
             <div className="flex flex-col gap-4">
               <TurnPanel game={game} myColour={myColour} />
 
+              <AiTurnPanel game={game} />
+
               <GameControls
                 game={game}
                 myColour={myColour}
@@ -139,6 +143,8 @@ export default function GamePage({
               )}
 
               <DiceProofPanel game={game} myColour={myColour} />
+
+              <DisputePanel game={game} />
 
               <div className="rounded-xl border border-border bg-surface p-4">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-text-muted">

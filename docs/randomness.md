@@ -1,47 +1,90 @@
-# Randomness Design (two-dice variant)
+# Randomness Design (v0.3 — GenLayer-consensus hybrid)
 
-## Commit-Reveal Scheme
+## Why this changed
 
-LudoProof uses a commit-reveal protocol for dice fairness. Both dice of a single
-roll are derived from one revealed seed, but with a distinct nonce tag for each
-die so the values are independent yet deterministic.
+In v0.2 the dice were derived purely from a commit-reveal seed via `sha256`. That
+made the contract reproducible on any deterministic EVM, which is why the first
+LudoProof submission was rejected: it didn't use GenLayer consensus for any
+meaningful non-deterministic step.
 
-### Phase 1: Commitment (before game starts)
+v0.3 keeps commit-reveal (it still binds each player to their roll) and adds a
+live validator-consensus entropy source on top.
 
-Each player:
-1. Generates a raw seed: `seed = randomUUID() + walletAddress + Date.now()`
-2. Saves the raw seed to `localStorage` under key `ludoproof_seed:{gameId}:{wallet}`
-3. Computes `commitment = sha256(rawSeed)`
-4. Calls `commit_seed(gameId, commitment)` on the contract
+## The hybrid scheme
 
-### Phase 2: Reveal (during your turn)
+Each roll mixes two independent entropy sources:
 
-When it's your turn to roll:
-1. Retrieve raw seed from localStorage
-2. Call `roll_dice(gameId, rawSeed)`
-3. Contract verifies: `sha256(rawSeed) == storedCommitment`
-4. Contract derives **two** dice values, each tagged with its index:
+1. **Player-bound entropy (commit-reveal, unchanged):** each player commits
+   `sha256(rawSeed)` before the game starts; on their turn they reveal `rawSeed`
+   and the contract verifies the hash.
+2. **Network-bound entropy (new, via GenLayer consensus):** the contract calls
+   `gl.eq_principle_strict_eq(_fetch)` where `_fetch` pulls the latest round
+   from the [drand](https://drand.love) public randomness beacon
+   (`https://api.drand.sh/public/latest`) and returns
+   `sha256(payload)`. Every validator independently fetches drand. Consensus
+   only passes if their hashes agree, so a single dishonest validator cannot
+   manipulate the result.
+
+The two are combined as:
 
 ```
-d1 = sha256(gameId | player | rawSeed | rollNonce | moveCount | "d0") % 6 + 1
-d2 = sha256(gameId | player | rawSeed | rollNonce | moveCount | "d1") % 6 + 1
+beacon = gl.eq_principle_strict_eq(lambda: sha256(drand_payload))
+d1     = sha256(gameId | player | rawSeed | beacon | rollNonce | moveCount | "d0") % 6 + 1
+d2     = sha256(gameId | player | rawSeed | beacon | rollNonce | moveCount | "d1") % 6 + 1
 ```
 
-## Why this is fair
+## Why this is fair *and* GenLayer-native
 
-- You cannot know either dice result before committing (hash pre-image resistance).
-- You cannot change your seed after committing (binding property of SHA-256).
-- d1 and d2 are tied to different domain-separator tags (`d0`, `d1`), so neither value can be predicted independently.
-- Anyone can verify a roll offline given: gameId, player address, rawSeed, rollNonce, moveCount.
+- The player cannot predict the dice when committing — drand's next round is
+  unknown ahead of time.
+- The validators cannot predict the dice either — the player's `rawSeed` is
+  still secret at commit time.
+- No single validator can rewrite history — `eq_principle_strict_eq` rejects
+  the transaction unless every validator agrees on the beacon hash.
+- The contract is no longer reproducible on a deterministic EVM: replaying the
+  same inputs without GenLayer's non-deterministic web call cannot reach the
+  same result.
 
-## Important Caveats
+## AI opponent (`mode: "vs_ai"`)
 
-- **Each seed is used once per roll nonce.** `rollNonce` increments per roll, so the same seed produces different dice pairs on different turns.
-- **Seed lives in localStorage.** If you clear browser storage before rolling, you cannot roll from that device. The frontend shows a warning if the seed is missing.
-- **Frontend dice animation is illustrative only.** The authoritative pair comes from the contract state after the transaction is confirmed.
+When a game is created with `mode="vs_ai"`, a sentinel player at
+`0xai00000000000000000000000000000000000ai` is seated automatically.
+`ai_take_turn(game_id)` performs the AI's full turn:
+
+- **Dice:** sourced from the same drand beacon (no commit-reveal — the AI has
+  no wallet to commit from).
+- **Token choice:** `gl.eq_principle_prompt_comparative` wrapping
+  `gl.nondet.exec_prompt`. Each validator asks an LLM which legal token to
+  advance; consensus only passes if their answers agree on the index. The
+  principle string constrains the LLM's output to JSON `{"token": <index>}`
+  with the index drawn from the legal-moves list.
+
+The AI is excluded from the leaderboard.
+
+## Dispute system
+
+Any player in a game may file a natural-language dispute about a specific move
+via `submit_dispute(game_id, move_number, claim)`. `resolve_dispute(dispute_id)`
+asks an LLM, under comparative equivalence, to rule on the claim given the
+last 20 moves of history. Rulings are `upheld` or `rejected`; the principle
+string requires validators to agree on the ruling field.
+
+## Important caveats
+
+- **drand fetch latency.** Validators must hit the same drand round. The
+  beacon updates every ~3s; if two validators straddle a round change,
+  consensus retries. In practice this resolves within one re-run.
+- **Each rawSeed is used once per `rollNonce`.** The nonce increments per
+  roll, so a single revealed seed produces different dice on different turns.
+- **rawSeed lives in localStorage.** If you clear browser storage before
+  rolling, you cannot roll from that device.
+- **Frontend dice animation is illustrative only.** The authoritative pair
+  comes from contract state after the transaction is finalised.
 
 ## Replicating the derivation client-side
 
-The same formulas are implemented in `apps/web/lib/crypto/dice-proof.ts`
-(`deriveSingleDieLocally` and `deriveDicePairLocally`) so the proof panel can
-show users the exact derivation for verification.
+The mixing formula is implemented in
+`apps/web/lib/crypto/dice-proof.ts` (`deriveSingleDieLocally` /
+`deriveDicePairLocally`). To replay a roll offline you need: `gameId`,
+`playerAddress`, `rawSeed`, `rollNonce`, `moveCount`, and the `beacon` hash
+emitted by the contract for that roll.

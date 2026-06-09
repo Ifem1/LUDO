@@ -13,6 +13,9 @@ import {
   glSubmitMove,
   glForfeitGame,
   glCancelGame,
+  glAiTakeTurn,
+  glSubmitDispute,
+  glResolveDispute,
 } from "@/lib/genlayer/calls";
 
 function useContractWriter() {
@@ -49,8 +52,17 @@ function useContractWriter() {
 export function useGenLayerContract(gameId: string) {
   const write = useContractWriter();
 
-  const createGame = (maxPlayers: number) =>
-    write("create_game", gameId, (acc) => glCreateGame(acc, gameId, maxPlayers));
+  const createGame = (maxPlayers: number, mode: "pvp" | "vs_ai" = "pvp") =>
+    write("create_game", gameId, (acc) => glCreateGame(acc, gameId, maxPlayers, mode));
+
+  const aiTakeTurn = () =>
+    write("ai_take_turn", gameId, (acc) => glAiTakeTurn(acc, gameId));
+
+  const submitDispute = (moveNumber: number, claim: string) =>
+    write("submit_dispute", gameId, (acc) => glSubmitDispute(acc, gameId, moveNumber, claim));
+
+  const resolveDispute = (disputeId: string) =>
+    write("resolve_dispute", gameId, (acc) => glResolveDispute(acc, disputeId));
 
   const joinGame = (colour: string) =>
     write("join_game", gameId, (acc) => glJoinGame(acc, gameId, colour));
@@ -75,5 +87,17 @@ export function useGenLayerContract(gameId: string) {
   const cancelGame = () =>
     write("cancel_game", gameId, (acc) => glCancelGame(acc, gameId));
 
-  return { createGame, joinGame, commitSeed, startGame, rollDice, submitMove, forfeitGame, cancelGame };
+  return {
+    createGame,
+    joinGame,
+    commitSeed,
+    startGame,
+    rollDice,
+    submitMove,
+    forfeitGame,
+    cancelGame,
+    aiTakeTurn,
+    submitDispute,
+    resolveDispute,
+  };
 }

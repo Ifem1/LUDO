@@ -6,7 +6,16 @@ import json
 import hashlib
 
 
-_CONTRACT_VERSION = "0.2.16-2dice"
+_CONTRACT_VERSION = "0.3.0-genlayer-consensus"
+
+# AI opponent uses a sentinel address so it can be stored alongside human
+# players without colliding with any wallet.
+AI_PLAYER_ADDRESS = "0xai00000000000000000000000000000000000ai"
+
+# drand quicknet (unchained, 3s rounds). Used as a public randomness beacon so
+# each validator independently pulls entropy from the live network and consensus
+# requires them to agree on the round number we derive dice from.
+DRAND_LATEST_URL = "https://api.drand.sh/public/latest"
 
 COLOURS = ("red", "blue", "yellow", "green")
 COLOUR_OFFSETS = {
@@ -25,12 +34,15 @@ class LudoProof(gl.Contract):
     leaderboard_seen: TreeMap[str, str]
     recent_games: TreeMap[str, str]
     open_games: TreeMap[str, str]
+    disputes: TreeMap[str, str]
     total_games: u256
     total_players: u256
+    total_disputes: u256
 
     def __init__(self):
         self.total_games = u256(0)
         self.total_players = u256(0)
+        self.total_disputes = u256(0)
 
     @gl.public.view
     def contract_version(self) -> str:
@@ -205,8 +217,12 @@ class LudoProof(gl.Contract):
         return json.dumps(rows, separators=(",", ":"))
 
     @gl.public.write
-    def create_game(self, game_id: str, max_players: u256) -> str:
+    def create_game(self, game_id: str, max_players: u256, mode: str = "pvp") -> str:
         clean_game_id = self._clean_text(game_id)
+        clean_mode = self._clean_text(mode).lower() or "pvp"
+
+        if clean_mode not in ("pvp", "vs_ai"):
+            raise Exception("invalid_mode")
 
         if clean_game_id == "":
             raise Exception("game_id_required")
@@ -215,7 +231,10 @@ class LudoProof(gl.Contract):
             raise Exception("game_already_exists")
 
         max_p = int(max_players)
-        if max_p not in (2, 3, 4):
+        if clean_mode == "vs_ai":
+            # 1 human + 1 AI. Forced to 2 to keep turn logic simple.
+            max_p = 2
+        elif max_p not in (2, 3, 4):
             raise Exception("max_players_must_be_2_3_or_4")
 
         sender = self._get_sender()
@@ -225,6 +244,7 @@ class LudoProof(gl.Contract):
             "game_id": clean_game_id,
             "creator": sender,
             "status": "waiting",
+            "mode": clean_mode,
             "max_players": max_p,
             "players": [],
             "current_turn_index": 0,
@@ -240,6 +260,24 @@ class LudoProof(gl.Contract):
             "move_history": [],
         }
 
+        if clean_mode == "vs_ai":
+            # Pre-seat the AI as a fully-committed player so the human can join
+            # one colour and immediately start the game. The AI's "seed" is just
+            # the game id; randomness for the AI is provided by drand at roll
+            # time, not by commit-reveal.
+            ai_player = {
+                "address": AI_PLAYER_ADDRESS,
+                "colour": "blue",
+                "tokens": [-1, -1, -1, -1],
+                "seed_commitment": self._hash_text(clean_game_id + "|ai"),
+                "has_committed_seed": True,
+                "has_revealed_seed": False,
+                "forfeited": False,
+                "is_ai": True,
+                "joined_at": 0,
+            }
+            game["players"].append(ai_player)
+
         self.games[clean_game_id] = json.dumps(game, separators=(",", ":"))
         self.recent_games[str(game_number)] = clean_game_id
         self.open_games[str(game_number)] = clean_game_id
@@ -251,6 +289,7 @@ class LudoProof(gl.Contract):
                 "action": "create_game",
                 "game_id": clean_game_id,
                 "creator": sender,
+                "mode": clean_mode,
             },
             separators=(",", ":"),
         )
@@ -419,10 +458,11 @@ class LudoProof(gl.Contract):
         if seed_hash != expected:
             raise Exception("seed_reveal_does_not_match_commitment")
 
-        # Derive two dice values from the revealed seed. The contract uses
-        # a different nonce-offset for each die so the values are independent.
-        d1 = self._derive_dice(game, sender, revealed_seed, 0)
-        d2 = self._derive_dice(game, sender, revealed_seed, 1)
+        # Pull live randomness via GenLayer consensus, then mix it with the
+        # player's revealed seed and a domain separator for each die.
+        beacon = self._fetch_validator_entropy()
+        d1 = self._derive_dice(game, sender, revealed_seed, 0, beacon)
+        d2 = self._derive_dice(game, sender, revealed_seed, 1, beacon)
         is_doubles = d1 == d2
 
         current_player["has_revealed_seed"] = True
@@ -784,6 +824,320 @@ class LudoProof(gl.Contract):
             separators=(",", ":"),
         )
 
+    @gl.public.write
+    def ai_take_turn(self, game_id: str) -> str:
+        """Drive the AI opponent through a full turn in a vs_ai game.
+
+        The dice come from the validator-entropy beacon (no commit-reveal — the
+        AI has no wallet to commit from). The token choice comes from an LLM
+        evaluated under the comparative equivalence principle, so each validator
+        independently asks a model for the best move and consensus only passes
+        if their answers agree on the chosen token.
+
+        Either player may invoke this when it is the AI's turn; the contract
+        verifies turn ownership, not msg.sender."""
+        clean_game_id = self._clean_text(game_id)
+        game = self._load_game(clean_game_id)
+
+        if game.get("mode") != "vs_ai":
+            raise Exception("not_an_ai_game")
+
+        if game["status"] != "active":
+            raise Exception("game_not_active")
+
+        current_index = int(game["current_turn_index"])
+        current_player = game["players"][current_index]
+
+        if not current_player.get("is_ai", False):
+            raise Exception("not_ai_turn")
+
+        if game["dice_remaining"] or game["must_move"]:
+            raise Exception("move_pending")
+
+        # --- Roll dice via validator consensus ------------------------------
+        beacon = self._fetch_validator_entropy()
+        ai_seed = self._hash_text(
+            clean_game_id + "|ai|" + str(game["current_roll_nonce"]) + "|" + str(game["move_count"])
+        )
+        d1 = self._derive_dice(game, AI_PLAYER_ADDRESS, ai_seed, 0, beacon)
+        d2 = self._derive_dice(game, AI_PLAYER_ADDRESS, ai_seed, 1, beacon)
+
+        game["current_roll_nonce"] = int(game["current_roll_nonce"]) + 1
+        game["current_dice"] = [d1, d2]
+        game["dice_remaining"] = [d1, d2]
+        game["move_count"] = int(game["move_count"]) + 1
+
+        self._append_move(
+            game,
+            {
+                "moveType": "roll",
+                "player": AI_PLAYER_ADDRESS,
+                "colour": current_player["colour"],
+                "dice": [d1, d2],
+                "reason": "ai_beacon_roll",
+            },
+        )
+
+        # If no die is playable, pass turn.
+        if not self._any_die_playable(game, current_index, [d1, d2]):
+            self._append_move(
+                game,
+                {
+                    "moveType": "no_move",
+                    "player": AI_PLAYER_ADDRESS,
+                    "colour": current_player["colour"],
+                    "dice": [d1, d2],
+                    "reason": "no_legal_token_move",
+                },
+            )
+            game["current_dice"] = None
+            game["dice_remaining"] = []
+            game["must_move"] = False
+            game["consecutive_doubles"] = 0
+            self._advance_turn(game)
+            self._save_game(clean_game_id, game)
+            return json.dumps({"ok": True, "action": "ai_take_turn", "dice": [d1, d2], "moved": False}, separators=(",", ":"))
+
+        # --- Play each die. Token choice comes from an LLM under the
+        # comparative equivalence principle. ---------------------------------
+        remaining = [d1, d2]
+        moves_played = []
+        while remaining:
+            die = int(remaining[0])
+            valid = self._valid_token_indexes(game, current_index, die)
+            if not valid:
+                # Skip this die — try the other.
+                remaining.pop(0)
+                continue
+
+            token_choice = self._ai_choose_token(game, current_index, die, valid)
+            old_position = int(current_player["tokens"][token_choice])
+            new_position = self._next_position(old_position, die)
+            current_player["tokens"][token_choice] = new_position
+            game["players"][current_index] = current_player
+
+            capture_result = self._apply_capture(game, current_index, token_choice, new_position)
+            game["move_count"] = int(game["move_count"]) + 1
+
+            self._append_move(
+                game,
+                {
+                    "moveType": "move",
+                    "player": AI_PLAYER_ADDRESS,
+                    "colour": current_player["colour"],
+                    "dice": die,
+                    "tokenIndex": token_choice,
+                    "from": old_position,
+                    "to": new_position,
+                    "reason": "ai_llm_choice",
+                },
+            )
+            for cap in capture_result["captures"]:
+                self._append_move(
+                    game,
+                    {
+                        "moveType": "capture",
+                        "player": AI_PLAYER_ADDRESS,
+                        "colour": current_player["colour"],
+                        "capturedPlayer": cap["capturedPlayer"],
+                        "capturedTokenIndex": cap["capturedTokenIndex"],
+                        "reason": "landed_on_opponent_non_safe_square",
+                    },
+                )
+
+            moves_played.append({"die": die, "token": token_choice, "to": new_position})
+            remaining.pop(0)
+
+            if self._check_winner(game, current_index):
+                game["status"] = "completed"
+                game["winner"] = AI_PLAYER_ADDRESS
+                game["completed_at"] = int(game["move_count"])
+                game["current_dice"] = None
+                game["dice_remaining"] = []
+                game["must_move"] = False
+                self._append_move(
+                    game,
+                    {
+                        "moveType": "win",
+                        "player": AI_PLAYER_ADDRESS,
+                        "colour": current_player["colour"],
+                        "reason": "all_tokens_finished",
+                    },
+                )
+                self._update_stats_on_game_end(game, AI_PLAYER_ADDRESS)
+                self._save_game(clean_game_id, game)
+                return json.dumps({"ok": True, "action": "ai_take_turn", "moves": moves_played, "winner": AI_PLAYER_ADDRESS}, separators=(",", ":"))
+
+            # If the second die is now unplayable, drop it.
+            if remaining and not self._any_die_playable(game, current_index, remaining):
+                remaining = []
+
+        # End of AI turn.
+        was_doubles = d1 == d2
+        game["current_dice"] = None
+        game["dice_remaining"] = []
+        game["must_move"] = False
+        if was_doubles and int(game["consecutive_doubles"]) < 2:
+            game["consecutive_doubles"] = int(game["consecutive_doubles"]) + 1
+            # AI gets another turn — caller can invoke ai_take_turn again.
+        else:
+            game["consecutive_doubles"] = 0
+            self._advance_turn(game)
+
+        self._save_game(clean_game_id, game)
+        return json.dumps({"ok": True, "action": "ai_take_turn", "moves": moves_played, "dice": [d1, d2]}, separators=(",", ":"))
+
+    def _ai_choose_token(self, game: dict, player_index: int, die: int, valid_tokens: list) -> int:
+        """Ask an LLM, under the comparative equivalence principle, which of
+        the currently-legal tokens the AI should advance. Falls back to the
+        first legal token if the LLM response can't be parsed."""
+        if len(valid_tokens) == 1:
+            return valid_tokens[0]
+
+        player = game["players"][player_index]
+        opponents = []
+        for i, p in enumerate(game["players"]):
+            if i != player_index and not p.get("forfeited", False):
+                opponents.append({"colour": p["colour"], "tokens": p["tokens"]})
+
+        prompt = (
+            "You are playing Ludo as the {colour} player. You rolled a {die}. "
+            "Your four tokens are at positions {tokens} (-1 means in base, 58 means finished). "
+            "The legal token indexes you may move with this die are {valid}. "
+            "Opponents: {opps}. Safe squares (global) are {safe}. "
+            "Choose the single best token index to advance. "
+            "Respond with ONLY a JSON object of the form {{\"token\": <index>}} and nothing else."
+        ).format(
+            colour=player["colour"],
+            die=die,
+            tokens=player["tokens"],
+            valid=valid_tokens,
+            opps=opponents,
+            safe=list(SAFE_SQUARES),
+        )
+
+        principle = (
+            "The chosen 'token' integer must be identical and must appear in the legal moves list "
+            + str(valid_tokens)
+            + "."
+        )
+
+        def _ask():
+            return gl.nondet.exec_prompt(prompt)
+
+        try:
+            answer = gl.eq_principle_prompt_comparative(_ask, principle)
+            parsed = json.loads(self._extract_json(answer))
+            choice = int(parsed.get("token", valid_tokens[0]))
+            if choice in valid_tokens:
+                return choice
+        except Exception:
+            pass
+
+        return valid_tokens[0]
+
+    def _extract_json(self, text: str) -> str:
+        s = str(text).strip()
+        start = s.find("{")
+        end = s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return s[start : end + 1]
+        return s
+
+    @gl.public.write
+    def submit_dispute(self, game_id: str, move_number: u256, claim: str) -> str:
+        """A player files a natural-language dispute about a specific move.
+        The dispute is stored pending LLM adjudication via resolve_dispute."""
+        clean_game_id = self._clean_text(game_id)
+        sender = self._get_sender()
+        game = self._load_game(clean_game_id)
+
+        if self._find_player(game, sender) == -1:
+            raise Exception("caller_not_player")
+
+        clean_claim = self._clean_text(claim)
+        if len(clean_claim) == 0 or len(clean_claim) > 1000:
+            raise Exception("invalid_claim_length")
+
+        dispute_number = int(self.total_disputes)
+        dispute_id = clean_game_id + ":" + str(dispute_number)
+        dispute = {
+            "dispute_id": dispute_id,
+            "game_id": clean_game_id,
+            "claimant": sender,
+            "move_number": int(move_number),
+            "claim": clean_claim,
+            "status": "pending",
+            "ruling": None,
+            "rationale": None,
+        }
+        self.disputes[dispute_id] = json.dumps(dispute, separators=(",", ":"))
+        self.total_disputes = u256(dispute_number + 1)
+
+        return json.dumps({"ok": True, "action": "submit_dispute", "dispute_id": dispute_id}, separators=(",", ":"))
+
+    @gl.public.write
+    def resolve_dispute(self, dispute_id: str) -> str:
+        """Resolve a pending dispute by asking an LLM, under the comparative
+        equivalence principle, to rule on the claim given the relevant move
+        history. The ruling is binding: 'upheld' or 'rejected'."""
+        clean_id = self._clean_text(dispute_id)
+        if clean_id not in self.disputes:
+            raise Exception("dispute_not_found")
+
+        dispute = json.loads(self.disputes[clean_id])
+        if dispute["status"] != "pending":
+            raise Exception("dispute_already_resolved")
+
+        game = self._load_game(dispute["game_id"])
+        move_no = int(dispute["move_number"])
+        relevant = [m for m in game["move_history"] if int(m.get("moveNumber", 0)) <= move_no][-20:]
+
+        prompt = (
+            "You are an impartial Ludo referee. A player has filed this complaint about move #"
+            + str(move_no)
+            + ": \"" + str(dispute["claim"]).replace("\"", "'") + "\". "
+            "Here are the most recent moves leading up to and including the disputed move: "
+            + json.dumps(relevant, separators=(",", ":"))
+            + ". Given standard Ludo rules (must roll 6 to leave base, exact landing on 58 to finish, "
+            "captures only on non-safe squares, three consecutive doubles cancels the turn), is the "
+            "complaint VALID? Respond with ONLY a JSON object of the form "
+            "{\"ruling\": \"upheld\" | \"rejected\", \"rationale\": \"<one short sentence>\"} and nothing else."
+        )
+
+        principle = (
+            "The 'ruling' field must be identical between validators (either 'upheld' or 'rejected'). "
+            "The 'rationale' may differ in wording but must agree on the substantive judgement."
+        )
+
+        def _ask():
+            return gl.nondet.exec_prompt(prompt)
+
+        try:
+            answer = gl.eq_principle_prompt_comparative(_ask, principle)
+            parsed = json.loads(self._extract_json(answer))
+            ruling = str(parsed.get("ruling", "rejected")).lower()
+            if ruling not in ("upheld", "rejected"):
+                ruling = "rejected"
+            rationale = str(parsed.get("rationale", ""))[:280]
+        except Exception:
+            ruling = "rejected"
+            rationale = "adjudication_failed"
+
+        dispute["status"] = "resolved"
+        dispute["ruling"] = ruling
+        dispute["rationale"] = rationale
+        self.disputes[clean_id] = json.dumps(dispute, separators=(",", ":"))
+
+        return json.dumps({"ok": True, "action": "resolve_dispute", "dispute_id": clean_id, "ruling": ruling, "rationale": rationale}, separators=(",", ":"))
+
+    @gl.public.view
+    def get_dispute(self, dispute_id: str) -> str:
+        clean_id = self._clean_text(dispute_id)
+        if clean_id not in self.disputes:
+            raise Exception("dispute_not_found")
+        return self.disputes[clean_id]
+
     def _load_game(self, game_id: str) -> dict:
         clean_game_id = self._clean_text(game_id)
 
@@ -815,16 +1169,43 @@ class LudoProof(gl.Contract):
     def _hash_text(self, value: str) -> str:
         return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
-    def _derive_dice(self, game: dict, player: str, revealed_seed: str, die_index: int) -> int:
-        """Derive one of the two dice values for the current roll. `die_index`
-        is 0 or 1 and is mixed into the hash so the two values are independent
-        but both are deterministically derived from the revealed seed."""
+    def _fetch_validator_entropy(self) -> str:
+        """Pull entropy from the drand randomness beacon under the equivalence
+        principle. Each validator independently fetches the latest round and
+        consensus rejects the transaction unless they all agree on the value.
+        This is the step that makes LudoProof a genuine GenLayer Intelligent
+        Contract rather than a deterministic EVM port — the dice cannot be
+        produced without GenLayer's optimistic-democracy consensus over a
+        non-deterministic external call."""
+
+        def _fetch():
+            page = gl.nondet.web.render(DRAND_LATEST_URL, mode="text")
+            # drand returns JSON like {"round": N, "randomness": "<hex>", ...}.
+            # We hash the whole payload so any divergence between validators is
+            # caught by strict-eq consensus.
+            return hashlib.sha256(str(page).encode("utf-8")).hexdigest()
+
+        return gl.eq_principle_strict_eq(_fetch)
+
+    def _derive_dice(self, game: dict, player: str, revealed_seed: str, die_index: int, beacon: str) -> int:
+        """Derive one of the two dice values for the current roll.
+
+        Inputs combined:
+        - `revealed_seed`: commit-reveal entropy from the player (binds them).
+        - `beacon`: validator-consensus entropy from drand (binds the network).
+        - `die_index`: domain separator for d0 vs d1.
+
+        Neither the player nor any single validator can predetermine the result;
+        the player commits before the beacon round is known, and the beacon is
+        reached via GenLayer consensus."""
         source = (
             str(game["game_id"])
             + "|"
             + self._normalise_address(player)
             + "|"
             + str(revealed_seed)
+            + "|"
+            + str(beacon)
             + "|"
             + str(game["current_roll_nonce"])
             + "|"
@@ -1094,6 +1475,10 @@ class LudoProof(gl.Contract):
 
         for player in game["players"]:
             key = self._normalise_address(player["address"])
+            if key == AI_PLAYER_ADDRESS:
+                # The AI opponent is not a wallet — keep it out of stats and
+                # leaderboard entirely.
+                continue
             stats = self._get_stats(key)
 
             stats["games_played"] = int(stats["games_played"]) + 1

@@ -5,7 +5,7 @@ import { getContractAddress } from "./contract";
 import { parseGameState, parsePlayerStats, safeJsonParse } from "./parser";
 import { useAuthStore } from "@/store/auth-store";
 import type { GameState, PlayerStats } from "@ludoproof/shared";
-import type { RawGameContract, RawStatsContract, ValidMovesContract } from "@/types/contract";
+import type { RawGameContract, RawStatsContract, ValidMovesContract, RawDisputeContract } from "@/types/contract";
 
 type Account = `0x${string}`;
 
@@ -52,9 +52,36 @@ async function writeContract(
 export async function glCreateGame(
   account: Account,
   gameId: string,
-  maxPlayers: number
+  maxPlayers: number,
+  mode: "pvp" | "vs_ai" = "pvp"
 ): Promise<string> {
-  return writeContract(account, "create_game", [gameId, BigInt(maxPlayers)]);
+  return writeContract(account, "create_game", [gameId, BigInt(maxPlayers), mode]);
+}
+
+export async function glAiTakeTurn(account: Account, gameId: string): Promise<string> {
+  return writeContract(account, "ai_take_turn", [gameId]);
+}
+
+export async function glSubmitDispute(
+  account: Account,
+  gameId: string,
+  moveNumber: number,
+  claim: string
+): Promise<string> {
+  return writeContract(account, "submit_dispute", [gameId, BigInt(moveNumber), claim]);
+}
+
+export async function glResolveDispute(account: Account, disputeId: string): Promise<string> {
+  return writeContract(account, "resolve_dispute", [disputeId]);
+}
+
+export async function glGetDispute(disputeId: string): Promise<RawDisputeContract | null> {
+  try {
+    const raw = await readContract("get_dispute", [disputeId]);
+    return safeJsonParse<RawDisputeContract>(raw);
+  } catch {
+    return null;
+  }
 }
 
 export async function glJoinGame(

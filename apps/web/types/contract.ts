@@ -17,6 +17,7 @@ export type RawGameContract = {
   game_id: string;
   creator: string;
   status: string;
+  mode?: string;
   max_players: number;
   players: RawPlayerContract[];
   current_turn_index: number;
@@ -42,7 +43,19 @@ export type RawPlayerContract = {
   has_committed_seed: boolean;
   has_revealed_seed: boolean;
   forfeited?: boolean;
+  is_ai?: boolean;
   joined_at: number;
+};
+
+export type RawDisputeContract = {
+  dispute_id: string;
+  game_id: string;
+  claimant: string;
+  move_number: number;
+  claim: string;
+  status: "pending" | "resolved";
+  ruling: "upheld" | "rejected" | null;
+  rationale: string | null;
 };
 
 export type RawMoveContract = {
